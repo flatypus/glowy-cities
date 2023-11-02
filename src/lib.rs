@@ -1,5 +1,7 @@
+use rand::seq::IteratorRandom;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs;
 
 pub async fn grab_city_data(city: &str) -> Result<Vec<HashMap<&str, Value>>, ()> {
     let client = reqwest::Client::new();
@@ -50,11 +52,12 @@ pub async fn grab_city_data(city: &str) -> Result<Vec<HashMap<&str, Value>>, ()>
 
 pub async fn execute_osm_query(query: &str) -> Value {
     let client = reqwest::Client::new();
+    const OVERPASS: &str = "https://overpass-api.de/api/interpreter";
 
     println!("{}", query);
 
     let request = client
-        .get("https://overpass-api.de/api/interpreter")
+        .get(OVERPASS)
         .body(format!("data={}", query))
         .header("User-Agent", "reqwest")
         .header("Accept", "application/json")
@@ -77,4 +80,14 @@ pub fn create_folder_at_path(path: &str) {
 
 pub fn check_for_file(path: &str) -> bool {
     return std::path::Path::new(path).exists();
+}
+
+pub fn random_file_in_folder(path: &str) -> String {
+    let mut rng = rand::thread_rng();
+    if !check_for_file(path) {
+        panic!("Folder {} does not exist", path);
+    }
+    let files = fs::read_dir(path).unwrap();
+    let file = files.choose(&mut rng).unwrap().unwrap();
+    return file.path().to_str().unwrap().to_string();
 }
