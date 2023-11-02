@@ -146,7 +146,7 @@ async fn draw_city() {
         imgbuf.put_pixel(image_x, image_y, image::Rgb([255, 255, 255]));
     }
 
-    let path = "/Users/flatypus/Documents/a_star_wallpaper/wallpaper.png";
+    let path = "wallpaper.png";
     imgbuf.save(path).unwrap();
     wallpaper::set_from_path(path).unwrap();
 }
