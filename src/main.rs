@@ -1,80 +1,18 @@
-use a_star_wallpaper::{
-    check_for_file, create_folder_at_path, execute_osm_query, grab_city_data, random_file_in_folder,
-};
+use a_star_wallpaper::grab_cities;
 use bevy::prelude::*;
 use bevy::{
     core_pipeline::{bloom::BloomSettings, tonemapping::Tonemapping},
     sprite::MaterialMesh2dBundle,
 };
 use serde_json::Value;
-use std::cmp::min;
-use std::fs;
-use std::{collections::HashMap, io::BufWriter};
-
-fn get_query(area_id: &str) -> String {
-    return format!("[timeout:900][out:json];\
-        area({});\
-        (._; )->.area;\
-        (\
-        way[highway~'^(((motorway|trunk|primary|secondary|tertiary)(_link)?)|unclassified|residential|living_street|service|track)$'](area.area);\
-        node(w);\
-        );\
-        out skel;", area_id);
-}
-
-fn save_file(path_data: Value, path_name: &str) -> Result<(), ()> {
-    let file = fs::File::create(path_name).expect("Failed to create file");
-    let mut writer = BufWriter::new(file);
-    serde_json::to_writer_pretty(&mut writer, &path_data).expect("Failed to write file");
-    Ok(())
-}
-
-async fn query_overpass(place: HashMap<&str, Value>) {
-    let area_id = place.get("area_id").unwrap().as_f64().unwrap().to_string();
-    let city_name = place.get("key").unwrap().as_str().unwrap();
-    let query = get_query(&area_id);
-    println!("{}", query);
-
-    create_folder_at_path("tmp/overpass");
-    let path = format!("tmp/overpass/{}_{}.json", city_name, area_id);
-    if check_for_file(path.as_str()) {
-        println!("File {} already exists", path);
-        return;
-    }
-    let query_result = execute_osm_query(&query).await;
-    save_file(query_result, &path).expect("Failed to save file");
-}
-
-async fn grab_cities() {
-    let city = "Vancouver";
-    let city_data = grab_city_data(city)
-        .await
-        .expect("Failed to grab city data");
-
-    // loop over run async
-    for place in city_data {
-        query_overpass(place).await;
-    }
-}
-
-fn random_city_data() -> Value {
-    let city_path = random_file_in_folder("tmp/overpass");
-    println!("City_path: {}", city_path);
-    let city_data = serde_json::from_str::<Value>(&std::fs::read_to_string(city_path).unwrap())
-        .expect("Failed to parse JSON");
-    return city_data;
-}
 
 fn get_location_bounds(city_data: &Value) -> (f64, f64, f64, f64) {
-    let elements = city_data.get("elements").unwrap().as_array().unwrap();
+    let nodes = city_data.get("nodes").unwrap().as_object().unwrap();
     let (mut min_lat, mut min_long, mut max_lat, mut max_long) =
         (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for element in elements {
-        if element.get("type").unwrap().as_str().unwrap() != "node" {
-            continue;
-        }
-        let lat = element.get("lat").unwrap().as_f64().unwrap();
-        let long = element.get("lon").unwrap().as_f64().unwrap();
+    for (id, data) in nodes {
+        let lat = data.get("lat").unwrap().as_f64().unwrap();
+        let long = data.get("lon").unwrap().as_f64().unwrap();
         if lat < min_lat {
             min_lat = lat;
         }
@@ -106,21 +44,24 @@ fn setup(mut commands: Commands) {
 }
 
 fn setup_city() -> CityMetadata {
-    let city_data = random_city_data();
+    let city_data = a_star_wallpaper::random_city_data();
     let bounds = get_location_bounds(&city_data);
     let (min_lat, min_long, max_lat, max_long) = bounds;
     let image_width: f32 = 1920.0;
     let image_height: f32 =
         ((max_lat - min_lat) / (max_long - min_long) * image_width as f64).floor() as f32;
+    let nodes = city_data.get("nodes").unwrap().as_object().unwrap();
+    let ways = city_data.get("ways").unwrap().as_object().unwrap();
     return CityMetadata {
-        city_data,
+        nodes: nodes.clone(),
+        ways: ways.clone(),
         bounds,
         image_width,
         image_height,
     };
 }
 
-fn add_city(
+fn draw_cities(
     mut next_state: ResMut<NextState<AppMode>>,
     mut counters: ResMut<Counters>,
     city_metadata: ResMut<CityMetadata>,
@@ -134,28 +75,23 @@ fn add_city(
     let mesh: bevy::sprite::Mesh2dHandle =
         meshes.add(shape::RegularPolygon::new(0.4, 4).into()).into();
     let material = materials.add(ColorMaterial::from(Color::rgb(14.0, 2.0, 0.0)));
+    let nodes = &city_metadata.nodes;
+    let ways = &city_metadata.ways;
 
-    let elements = city_metadata
-        .city_data
-        .get("elements")
-        .unwrap()
-        .as_array()
-        .unwrap();
-
-    if counters.city_frame > elements.len() as u32 {
+    if counters.city_frame > nodes.len() as u32 {
         next_state.set(AppMode::PickPoints);
     }
 
-    for item in counters.city_frame..min(elements.len() as u32, counters.city_frame + 10000) {
-        let element = &elements[item as usize];
+    // convert node object to id list from keys
+    let key_list = nodes.keys().collect::<Vec<&String>>();
 
-        if element.get("type").unwrap().as_str().unwrap() != "node" {
-            counters.city_frame += 1;
-            return;
-        }
+    for item in counters.city_frame..std::cmp::min(nodes.len() as u32, counters.city_frame + 100000)
+    {
+        let id = key_list[item as usize];
+        let node = nodes.get(id).unwrap();
+        let lat = node.get("lat").unwrap().as_f64().unwrap();
+        let long = node.get("lon").unwrap().as_f64().unwrap();
 
-        let lat = element.get("lat").unwrap().as_f64().unwrap();
-        let long = element.get("lon").unwrap().as_f64().unwrap();
         let (min_lat, min_long, max_lat, max_long) = bounds;
 
         let image_x = (((long - min_long) / (max_long - min_long) * image_width as f64).floor()
@@ -166,10 +102,10 @@ fn add_city(
             as i32)
             - (image_height as i32 / 2);
 
-        // println!(
-        //     "lat: {}, long: {}, image_x: {}, image_y: {}, image_width:{}, image_height:{}, boxes: {}",
-        //     lat, long, image_x, image_y, image_width, image_height, counters.city_frame
-        // );
+        println!(
+            "lat: {}, long: {}, image_x: {}, image_y: {}, image_width:{}, image_height:{}, boxes: {}",
+            lat, long, image_x, image_y, image_width, image_height, counters.city_frame
+        );
 
         commands.spawn(MaterialMesh2dBundle {
             mesh: mesh.clone(),
@@ -192,7 +128,8 @@ struct Counters {
 }
 #[derive(Resource)]
 struct CityMetadata {
-    city_data: Value,
+    nodes: serde_json::Map<String, Value>,
+    ways: serde_json::Map<String, Value>,
     bounds: (f64, f64, f64, f64),
     image_width: f32,
     image_height: f32,
@@ -209,7 +146,7 @@ enum AppMode {
 
 #[tokio::main]
 async fn main() {
-    // grab_cities().await;
+    grab_cities("Vancouver").await;
     App::new()
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(Counters { city_frame: 0 })
@@ -217,6 +154,6 @@ async fn main() {
         .add_plugins(DefaultPlugins)
         .add_state::<AppMode>()
         .add_systems(Startup, setup)
-        .add_systems(Update, add_city.run_if(in_state(AppMode::DrawCity)))
+        .add_systems(Update, draw_cities.run_if(in_state(AppMode::DrawCity)))
         .run();
 }
