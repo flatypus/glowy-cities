@@ -1,17 +1,15 @@
 use a_star_wallpaper::{
     check_for_file, create_folder_at_path, execute_osm_query, grab_city_data, random_file_in_folder,
 };
-use image::RgbImage;
+use bevy::prelude::*;
+use bevy::{
+    core_pipeline::{bloom::BloomSettings, tonemapping::Tonemapping},
+    sprite::MaterialMesh2dBundle,
+};
 use serde_json::Value;
 use std::cmp::min;
-use std::error::Error;
 use std::fs;
-use std::io::Write;
-use std::process::Command;
-use std::{collections::HashMap, fs::File, io::BufWriter};
-use tempfile::NamedTempFile;
-use tokio::task::spawn_blocking;
-use wallpaper;
+use std::{collections::HashMap, io::BufWriter};
 
 fn get_query(area_id: &str) -> String {
     return format!("[timeout:900][out:json];\
@@ -25,7 +23,7 @@ fn get_query(area_id: &str) -> String {
 }
 
 fn save_file(path_data: Value, path_name: &str) -> Result<(), ()> {
-    let file = File::create(path_name).expect("Failed to create file");
+    let file = fs::File::create(path_name).expect("Failed to create file");
     let mut writer = BufWriter::new(file);
     serde_json::to_writer_pretty(&mut writer, &path_data).expect("Failed to write file");
     Ok(())
@@ -93,66 +91,132 @@ fn get_location_bounds(city_data: &Value) -> (f64, f64, f64, f64) {
     return (min_lat, min_long, max_lat, max_long);
 }
 
-fn set_wallpaper(path: &str) -> Result<(), Box<dyn Error>> {
-    // Generate the Applescript string
-    let cmd = &format!(
-        r#"tell app "finder" to set desktop picture to POSIX file {}"#,
-        enquote::enquote('"', path),
-    );
-    // Run it using osascript
-    Command::new("osascript").args(&["-e", cmd]).output()?;
-
-    Ok(())
+fn setup(mut commands: Commands) {
+    commands.spawn((
+        Camera2dBundle {
+            camera: Camera {
+                hdr: true,
+                ..default()
+            },
+            tonemapping: Tonemapping::TonyMcMapface,
+            ..default()
+        },
+        BloomSettings::default(),
+    ));
 }
 
-async fn draw_city() {
+fn setup_city() -> CityMetadata {
     let city_data = random_city_data();
-    let (min_lat, min_long, max_lat, max_long) = get_location_bounds(&city_data);
-    println!(
-        "min_lat: {}, min_long: {}, max_lat: {}, max_long: {}",
-        min_lat, min_long, max_lat, max_long
-    );
-    let image_width: u32 = 1920;
-    let image_height: u32 =
-        ((max_lat - min_lat) / (max_long - min_long) * image_width as f64).floor() as u32;
+    let bounds = get_location_bounds(&city_data);
+    let (min_lat, min_long, max_lat, max_long) = bounds;
+    let image_width: f32 = 1920.0;
+    let image_height: f32 =
+        ((max_lat - min_lat) / (max_long - min_long) * image_width as f64).floor() as f32;
+    return CityMetadata {
+        city_data,
+        bounds,
+        image_width,
+        image_height,
+    };
+}
 
-    println!(
-        "image_width: {}, image_height: {}",
-        image_width, image_height
-    );
+fn add_city(
+    mut next_state: ResMut<NextState<AppMode>>,
+    mut counters: ResMut<Counters>,
+    city_metadata: ResMut<CityMetadata>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    let bounds = &city_metadata.bounds;
+    let image_width = city_metadata.image_width;
+    let image_height = city_metadata.image_height;
+    let mesh: bevy::sprite::Mesh2dHandle =
+        meshes.add(shape::RegularPolygon::new(0.4, 4).into()).into();
+    let material = materials.add(ColorMaterial::from(Color::rgb(14.0, 2.0, 0.0)));
 
-    let mut imgbuf: RgbImage = image::ImageBuffer::new(image_width, image_height);
-    let elements = city_data.get("elements").unwrap().as_array().unwrap();
-    for element in elements {
+    let elements = city_metadata
+        .city_data
+        .get("elements")
+        .unwrap()
+        .as_array()
+        .unwrap();
+
+    if counters.city_frame > elements.len() as u32 {
+        next_state.set(AppMode::PickPoints);
+    }
+
+    for item in counters.city_frame..min(elements.len() as u32, counters.city_frame + 10000) {
+        let element = &elements[item as usize];
+
         if element.get("type").unwrap().as_str().unwrap() != "node" {
-            continue;
+            counters.city_frame += 1;
+            return;
         }
 
         let lat = element.get("lat").unwrap().as_f64().unwrap();
         let long = element.get("lon").unwrap().as_f64().unwrap();
+        let (min_lat, min_long, max_lat, max_long) = bounds;
 
-        let image_x = min(
-            ((long - min_long) / (max_long - min_long) * image_width as f64).floor() as u32,
-            image_width - 1,
-        );
+        let image_x = (((long - min_long) / (max_long - min_long) * image_width as f64).floor()
+            as i32)
+            - (image_width as i32 / 2);
 
-        let image_y = image_height
-            - 1
-            - min(
-                ((lat - min_lat) / (max_lat - min_lat) * image_height as f64).floor() as u32,
-                image_height - 1,
-            );
+        let image_y = (((lat - min_lat) / (max_lat - min_lat) * image_height as f64).floor()
+            as i32)
+            - (image_height as i32 / 2);
 
-        imgbuf.put_pixel(image_x, image_y, image::Rgb([255, 255, 255]));
+        // println!(
+        //     "lat: {}, long: {}, image_x: {}, image_y: {}, image_width:{}, image_height:{}, boxes: {}",
+        //     lat, long, image_x, image_y, image_width, image_height, counters.city_frame
+        // );
+
+        commands.spawn(MaterialMesh2dBundle {
+            mesh: mesh.clone(),
+            material: material.clone(),
+            transform: Transform::from_translation(Vec3::new(
+                image_x as f32 * 0.6,
+                image_y as f32 * 0.6,
+                0.0,
+            )),
+            ..default()
+        });
+
+        counters.city_frame += 1;
     }
+}
 
-    let path = "wallpaper.png";
-    imgbuf.save(path).unwrap();
-    wallpaper::set_from_path(path).unwrap();
+#[derive(Resource)]
+struct Counters {
+    city_frame: u32,
+}
+#[derive(Resource)]
+struct CityMetadata {
+    city_data: Value,
+    bounds: (f64, f64, f64, f64),
+    image_width: f32,
+    image_height: f32,
+}
+
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash, States)]
+enum AppMode {
+    #[default]
+    DrawCity,
+    PickPoints,
+    RunAStar,
+    DrawPath,
 }
 
 #[tokio::main]
 async fn main() {
     // grab_cities().await;
-    draw_city().await;
+    App::new()
+        .insert_resource(ClearColor(Color::BLACK))
+        .insert_resource(Counters { city_frame: 0 })
+        .insert_resource(setup_city())
+        .add_plugins(DefaultPlugins)
+        .add_state::<AppMode>()
+        .add_systems(Startup, setup)
+        .add_systems(Update, add_city.run_if(in_state(AppMode::DrawCity)))
+        .run();
 }
