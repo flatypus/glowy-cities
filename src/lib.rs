@@ -55,7 +55,7 @@ pub async fn execute_osm_query(query: &str) -> Value {
     let client = reqwest::Client::new();
     const OVERPASS: &str = "https://overpass-api.de/api/interpreter";
 
-    println!("{}", query);
+    println!("Querying overpass for: {}", query);
 
     let request = client
         .get(OVERPASS)
@@ -120,9 +120,8 @@ pub fn save_file(path_data: Value, path_name: &str) -> Result<(), ()> {
 
 pub async fn query_overpass(place: HashMap<&str, Value>) {
     let area_id = place.get("area_id").unwrap().as_f64().unwrap().to_string();
-    let city_name = place.get("key").unwrap().as_str().unwrap();
+    let city_name = place.get("name").unwrap().as_str().unwrap();
     let query = get_query(&area_id);
-    println!("{}", query);
 
     create_folder_at_path("tmp/overpass");
     let path = format!("tmp/overpass/{}_{}.json", city_name, area_id);
@@ -133,7 +132,7 @@ pub async fn query_overpass(place: HashMap<&str, Value>) {
     let query_result = execute_osm_query(&query).await;
     let elements = query_result.get("elements").unwrap().as_array().unwrap();
     let mut node_map: HashMap<String, Value> = HashMap::new();
-    let mut way_map: HashMap<String, Value> = HashMap::new();
+    let mut ways: Vec<Vec<String>> = Vec::new();
 
     for element in elements {
         if element.get("type").unwrap().as_str().unwrap() != "node" {
@@ -152,22 +151,23 @@ pub async fn query_overpass(place: HashMap<&str, Value>) {
         if element.get("type").unwrap().as_str().unwrap() != "way" {
             continue;
         }
-        let mut node_list = Vec::new();
-        for node in element.get("nodes").unwrap().as_array().unwrap() {
-            node_list.push(node_map.get(&node.as_i64().unwrap().to_string()).unwrap());
-        }
-        way_map.insert(element.get("id").unwrap().as_i64().unwrap().to_string(), {
-            let mut map: HashMap<&str, Value> = HashMap::new();
-            map.insert("nodes", json!(node_list));
-            json!(map)
-        });
+        ways.push(
+            element
+                .get("nodes")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|node| node.as_i64().unwrap().to_string())
+                .collect::<Vec<String>>(),
+        );
     }
 
     save_file(
         {
             let mut map: HashMap<&str, Value> = HashMap::new();
             map.insert("nodes", json!(node_map));
-            map.insert("ways", json!(way_map));
+            map.insert("ways", json!(ways));
             json!(map)
         },
         &path,
