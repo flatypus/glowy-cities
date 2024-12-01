@@ -92,12 +92,43 @@ pub fn random_file_in_folder(path: &str) -> String {
     if files.count() as i32 == 0 {
         panic!("Folder {} is empty", path);
     }
+
     let file = fs::read_dir(path)
         .unwrap()
         .choose(&mut rng)
         .unwrap()
         .unwrap();
+
     return file.path().to_str().unwrap().to_string();
+}
+
+pub fn load_search_file_in_folder(path: &str, search: &str) -> String {
+    let mut rng = rand::thread_rng();
+    if !check_for_file(path) {
+        panic!("Folder {} does not exist", path);
+    }
+    let files = fs::read_dir(path).unwrap();
+    if files.count() as i32 == 0 {
+        panic!("Folder {} is empty", path);
+    }
+
+    let file = fs::read_dir(path)
+        .unwrap()
+        .filter_map(|entry| {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_file() {
+                return Some(path);
+            }
+            return None;
+        })
+        .find(|path| {
+            let file_name = path.file_name().unwrap().to_str().unwrap();
+            return file_name.contains(search);
+        })
+        .unwrap();
+
+    return file.to_str().unwrap().to_string();
 }
 
 pub fn get_query(area_id: &str) -> String {
@@ -188,6 +219,14 @@ pub async fn grab_cities(city: &str) {
 
 pub fn random_city_data() -> Value {
     let city_path = random_file_in_folder("tmp/overpass");
+    println!("City_path: {}", city_path);
+    let city_data = serde_json::from_str::<Value>(&std::fs::read_to_string(city_path).unwrap())
+        .expect("Failed to parse JSON");
+    return city_data;
+}
+
+pub fn choose_city(search: &str) -> Value {
+    let city_path = load_search_file_in_folder("tmp/overpass", search);
     println!("City_path: {}", city_path);
     let city_data = serde_json::from_str::<Value>(&std::fs::read_to_string(city_path).unwrap())
         .expect("Failed to parse JSON");

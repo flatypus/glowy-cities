@@ -64,8 +64,8 @@ struct RoadSegment {
     length: f32,
 }
 
-fn setup_city() -> CityMetadata {
-    let city_data = a_star_wallpaper::random_city_data();
+fn setup_city(search: &str) -> CityMetadata {
+    let city_data = a_star_wallpaper::choose_city(search);
     let bounds = get_location_bounds(&city_data);
     let (min_lat, min_long, max_lat, max_long) = bounds;
     let image_width: f32 = 1920.0;
@@ -221,7 +221,7 @@ enum AppMode {
 async fn main() {
     // wallpaper::set_from_path("/Users/flatypus/Documents/excalidraw.png");
     // println!("{:?}", wallpaper::get());
-    // grab_cities("San Francisco").await;
+    // grab_cities("Kyoto").await;
 
     App::new()
         .insert_resource(ClearColor(Color::BLACK))
@@ -229,7 +229,7 @@ async fn main() {
             city_frame: 0,
             glow_amount: 0,
         })
-        .insert_resource(setup_city())
+        .insert_resource(setup_city("京都"))
         .add_plugins(DefaultPlugins)
         .add_plugins(TweeningPlugin)
         .add_state::<AppMode>()
